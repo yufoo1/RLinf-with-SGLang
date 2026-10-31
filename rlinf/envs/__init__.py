@@ -36,6 +36,7 @@ class SupportedEnvType(Enum):
     REAL = "real"
     FRANKASIM = "frankasim"
     HABITAT = "habitat"
+    ACTIVEVLN = "activevln"
     WORLD_MODEL = "world_model"
     GENESIS = "genesis"
     EMBODICHAIN = "embodichain"
@@ -86,6 +87,11 @@ def get_env_cls(env_type: str, env_cfg=None):
     """
 
     env_type = SupportedEnvType(env_type)
+
+    if env_type == SupportedEnvType.ACTIVEVLN:
+        from rlinf.envs.sim.activevln.activevln_env import ActiveVLNEnv
+
+        return ActiveVLNEnv
 
     if env_type == SupportedEnvType.MANISKILL:
         if env_cfg.get("enable_offload", False):
