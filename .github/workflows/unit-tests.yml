@@ -67,6 +67,13 @@ jobs:
               [ $code -eq 0 ] || exit $code
           done
 
+      - name: Test the pinned EmbodiInfer ActiveVLN profile on CPU
+        run: |
+          source .venv/bin/activate
+          UV_TORCH_BACKEND=cpu uv pip install -r requirements/embodiinfer.txt
+          CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=1 PYTHONPATH=$(pwd) \
+            pytest tests/unit_tests/test_activevln.py tests/unit_tests/test_activevln_env.py -q
+
   unit-tests-rocm:
     runs-on: rocm
     steps:

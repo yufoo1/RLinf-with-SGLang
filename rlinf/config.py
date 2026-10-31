@@ -93,6 +93,7 @@ SupportedModel.OPENVLA = SupportedModel.register("openvla", force=True)
 SupportedModel.OPENVLA_OFT = SupportedModel.register("openvla_oft", force=True)
 SupportedModel.MOLMOACT2 = SupportedModel.register("molmoact2", force=True)
 SupportedModel.OPENPI = SupportedModel.register("openpi", force=True)
+SupportedModel.ACTIVEVLN = SupportedModel.register("activevln", force=True)
 SupportedModel.PI0_FAST = SupportedModel.register("pi0_fast", force=True)
 SupportedModel.STARVLA = SupportedModel.register("starvla", force=True)
 SupportedModel.MLP_POLICY = SupportedModel.register("mlp_policy", force=True)
@@ -141,6 +142,7 @@ EMBODIED_MODEL = set(
         SupportedModel.OPENVLA,
         SupportedModel.OPENVLA_OFT,
         SupportedModel.OPENPI,
+        SupportedModel.ACTIVEVLN,
         SupportedModel.PI0_FAST,
         SupportedModel.STARVLA,
         SupportedModel.MLP_POLICY,
@@ -1078,6 +1080,80 @@ def validate_embodied_cfg(cfg):
     model_cfg = cfg.rollout.model if only_eval else cfg.actor.model
     algorithm_cfg = cfg.get("algorithm", {}) or {}
     model_type = SupportedModel(model_cfg.model_type)
+    if (
+        cfg.rollout.get("generation_backend") == "embodiinfer"
+        and model_type != SupportedModel.ACTIVEVLN
+    ):
+        raise ValueError(
+            "EmbodiInfer rollout currently supports model_type=activevln only"
+        )
+    if model_type == SupportedModel.ACTIVEVLN:
+        if model_cfg.get("is_lora", False):
+            raise ValueError(
+                "ActiveVLN uses direct language-layer training; is_lora must be False"
+            )
+        if (
+            model_cfg.num_action_chunks != 1
+            or model_cfg.action_dim != model_cfg.activevln.max_new_tokens
+        ):
+            raise ValueError(
+                "ActiveVLN requires num_action_chunks=1 and action_dim=max_new_tokens"
+            )
+        if not only_eval:
+            if (
+                algorithm_cfg.get("adv_type") != "grpo"
+                or algorithm_cfg.get("logprob_type") != "sequence_token_level"
+            ):
+                raise ValueError(
+                    "ActiveVLN requires GRPO with sequence_token_level logprobs"
+                )
+            if cfg.actor.fsdp_config.strategy != "fsdp":
+                raise ValueError("ActiveVLN requires the FSDP1 strategy: fsdp")
+            if not cfg.actor.fsdp_config.get("use_orig_params", False):
+                raise ValueError(
+                    "ActiveVLN's frozen and trainable parameters require FSDP use_orig_params=True"
+                )
+            if cfg.actor.fsdp_config.get("wrap_policy") or cfg.actor.fsdp_config.get(
+                "wrappers"
+            ):
+                raise ValueError(
+                    "ActiveVLN requires root FSDP wrapping; omit custom wrap_policy"
+                )
+            if cfg.actor.fsdp_config.get("gradient_checkpointing", False):
+                raise ValueError("ActiveVLN requires gradient_checkpointing=False")
+            if cfg.env.train.group_size != algorithm_cfg.group_size:
+                raise ValueError(
+                    "ActiveVLN environment and algorithm group_size must match"
+                )
+        if cfg.rollout.get("generation_backend") != "embodiinfer":
+            raise ValueError(
+                "ActiveVLN requires rollout.generation_backend=embodiinfer"
+            )
+        if cfg.runner.get("rtc", {}).get("enabled", False):
+            raise ValueError("ActiveVLN does not support RTC")
+        sampling = cfg.rollout.get("sampling_params", {})
+        if sampling.get("top_k", 0) != 0:
+            raise ValueError("EmbodiInfer ActiveVLN requires top_k=0")
+        if sampling.get("max_new_tokens") != model_cfg.activevln.max_new_tokens:
+            raise ValueError(
+                "sampling max_new_tokens must match the model action capacity"
+            )
+        if not only_eval and not algorithm_cfg.get("recompute_logprobs", False):
+            raise ValueError(
+                "ActiveVLN training requires actor recompute_logprobs=True"
+            )
+        runtime = cfg.rollout.model.get("embodiinfer", {})
+        for option in ("resident_kv", "gpu_preprocess", "tree_decode"):
+            if runtime.get(option, False):
+                raise ValueError(
+                    f"ActiveVLN full-history rollout requires {option}=False"
+                )
+        if cfg.rollout.get("enable_cuda_graph", False) or cfg.rollout.get(
+            "enable_torch_compile", False
+        ):
+            raise ValueError(
+                "ActiveVLN does not support worker CUDA Graph or torch.compile capture"
+            )
     assert model_type in EMBODIED_MODEL or model_type in DIFFUSION_MODELS, (
         f"Model type: '{model_cfg.model_type}' is not supported by the embodied runner. "
         f"Supported embodied models: {sorted([x.value for x in EMBODIED_MODEL])}; "
@@ -1131,9 +1207,10 @@ def validate_embodied_cfg(cfg):
             SupportedModel.OPENVLA,
             SupportedModel.OPENVLA_OFT,
             SupportedModel.LINGBOTVLAV2,
+            SupportedModel.ACTIVEVLN,
         ], (
             f"algorithm.recompute_logprobs supports "
-            f"{[SupportedModel.OPENVLA.value, SupportedModel.OPENVLA_OFT.value, SupportedModel.LINGBOTVLAV2.value]}, "
+            f"{[SupportedModel.OPENVLA.value, SupportedModel.OPENVLA_OFT.value, SupportedModel.LINGBOTVLAV2.value, SupportedModel.ACTIVEVLN.value]}, "
             f"got '{model_cfg.model_type}'."
         )
         assert algorithm_cfg.get("adv_type", None) != "opd", (
